@@ -1,4 +1,9 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  OnModuleInit,
+  OnModuleDestroy,
+  Logger,
+} from '@nestjs/common';
 
 import { Car } from './car-seeder.interface';
 import {
@@ -6,15 +11,26 @@ import {
   models,
   locations,
 } from '../common/constants/car-details.constants';
+import { WriteHandlerService } from '../common/services/write-handler.service';
 
 @Injectable()
-export class CarSeederService implements OnModuleInit {
+export class CarSeederService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(CarSeederService.name);
+  private generationInterval: NodeJS.Timeout | null = null;
+  private isShuttingDown = false;
+
+  constructor(private readonly writeHandler: WriteHandlerService) {}
+
   onModuleInit() {
     // Start sending automatically when app starts
     this.startSendingCars();
   }
 
-  private generateRandomCar(): Car {
+  onModuleDestroy(): void {
+    this.stopSendingCars();
+  }
+
+  generateRandomCar(): Car {
     const make = this.randomItem(makes);
     const model = this.randomItem(models);
     const year = this.randomInt(2000, 2024);
@@ -43,13 +59,35 @@ export class CarSeederService implements OnModuleInit {
    * 1 car every 30ms  →  60,000 / 30 ≈ 2,000
    */
   startSendingCars() {
-    const intervalMs = 30;
+    const intervalMs =
+      parseInt(process.env.CAR_GENERATION_INTERVAL_MS || '30', 10) || 30;
 
-    setInterval(() => {
-      const car: Car | undefined = this.generateRandomCar();
+    this.logger.log(
+      `Starting car generation: ${intervalMs}ms interval (~${Math.round(60000 / intervalMs)} cars/minute)`,
+    );
 
-      // TODO: implement data transfer handling
-      Logger.log(`Sending car: ${JSON.stringify(car)}`);
+    this.generationInterval = setInterval(async () => {
+      if (this.isShuttingDown) {
+        return;
+      }
+
+      try {
+        // TODO: implement data transfer handling
+        const car = this.generateRandomCar();
+        await this.writeHandler.writeCar(car);
+      } catch (error: any) {
+        this.logger.error(`Failed to write car: ${error.message}`);
+      }
     }, intervalMs);
+  }
+
+  stopSendingCars() {
+    this.isShuttingDown = true;
+
+    if (this.generationInterval) {
+      clearInterval(this.generationInterval);
+      this.generationInterval = null;
+      this.logger.log('Car generation stopped');
+    }
   }
 }

@@ -1,0 +1,156 @@
+services:
+  # Redis Master
+  redis-master:
+    image: redis:7-alpine
+    container_name: redis-master
+    command: redis-server --port ${REDIS_MASTER_PORT:-6379} --appendonly yes
+    ports:
+      - "${REDIS_MASTER_PORT:-6379}:${REDIS_MASTER_PORT:-6379}"
+    networks:
+      - seeder-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "${REDIS_MASTER_PORT:-6379}", "ping"]
+      interval: ${REDIS_HEALTHCHECK_INTERVAL:-5s}
+      timeout: ${REDIS_HEALTHCHECK_TIMEOUT:-3s}
+      retries: ${REDIS_HEALTHCHECK_RETRIES:-5}
+    restart: unless-stopped
+
+  # Redis Replica
+  redis-replica:
+    image: redis:7-alpine
+    container_name: redis-replica
+    command: >
+      sh -c "redis-server --port ${REDIS_REPLICA_PORT:-6380} --replicaof redis-master ${REDIS_MASTER_PORT:-6379} --appendonly yes"
+    ports:
+      - "${REDIS_REPLICA_PORT:-6380}:${REDIS_REPLICA_PORT:-6380}"
+    networks:
+      - seeder-network
+    depends_on:
+      - redis-master
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "${REDIS_REPLICA_PORT:-6380}", "ping"]
+      interval: ${REDIS_HEALTHCHECK_INTERVAL:-5s}
+      timeout: ${REDIS_HEALTHCHECK_TIMEOUT:-3s}
+      retries: ${REDIS_HEALTHCHECK_RETRIES:-5}
+    restart: unless-stopped
+
+  # Redis Sentinel 1
+  redis-sentinel-1:
+    image: redis:7-alpine
+    container_name: redis-sentinel-1
+    command: >
+      sh -c "
+      until getent hosts redis-master > /dev/null 2>&1; do sleep 1; done;
+      REDIS_MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}');
+      echo port ${SENTINEL_PORT:-26379} > /etc/sentinel.conf;
+      echo sentinel monitor ${REDIS_SENTINEL_MASTER_NAME:-mymaster} $$REDIS_MASTER_IP ${REDIS_MASTER_PORT:-6379} ${SENTINEL_QUORUM:-2} >> /etc/sentinel.conf;
+      echo sentinel down-after-milliseconds ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_DOWN_AFTER_MS:-1000} >> /etc/sentinel.conf;
+      echo sentinel failover-timeout ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_FAILOVER_TIMEOUT_MS:-3000} >> /etc/sentinel.conf;
+      echo sentinel parallel-syncs ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_PARALLEL_SYNCS:-1} >> /etc/sentinel.conf;
+      redis-sentinel /etc/sentinel.conf"
+    ports:
+      - "${SENTINEL_1_PORT:-26379}:${SENTINEL_PORT:-26379}"
+    networks:
+      - seeder-network
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Redis Sentinel 2
+  redis-sentinel-2:
+    image: redis:7-alpine
+    container_name: redis-sentinel-2
+    command: >
+      sh -c "
+      until getent hosts redis-master > /dev/null 2>&1; do sleep 1; done;
+      REDIS_MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}');
+      echo port ${SENTINEL_PORT:-26379} > /etc/sentinel.conf;
+      echo sentinel monitor ${REDIS_SENTINEL_MASTER_NAME:-mymaster} $$REDIS_MASTER_IP ${REDIS_MASTER_PORT:-6379} ${SENTINEL_QUORUM:-2} >> /etc/sentinel.conf;
+      echo sentinel down-after-milliseconds ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_DOWN_AFTER_MS:-1000} >> /etc/sentinel.conf;
+      echo sentinel failover-timeout ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_FAILOVER_TIMEOUT_MS:-3000} >> /etc/sentinel.conf;
+      echo sentinel parallel-syncs ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_PARALLEL_SYNCS:-1} >> /etc/sentinel.conf;
+      redis-sentinel /etc/sentinel.conf"
+    ports:
+      - "${SENTINEL_2_PORT:-26380}:${SENTINEL_PORT:-26379}"
+    networks:
+      - seeder-network
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Redis Sentinel 3
+  redis-sentinel-3:
+    image: redis:7-alpine
+    container_name: redis-sentinel-3
+    command: >
+      sh -c "
+      until getent hosts redis-master > /dev/null 2>&1; do sleep 1; done;
+      REDIS_MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}');
+      echo port ${SENTINEL_PORT:-26379} > /etc/sentinel.conf;
+      echo sentinel monitor ${REDIS_SENTINEL_MASTER_NAME:-mymaster} $$REDIS_MASTER_IP ${REDIS_MASTER_PORT:-6379} ${SENTINEL_QUORUM:-2} >> /etc/sentinel.conf;
+      echo sentinel down-after-milliseconds ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_DOWN_AFTER_MS:-1000} >> /etc/sentinel.conf;
+      echo sentinel failover-timeout ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_FAILOVER_TIMEOUT_MS:-3000} >> /etc/sentinel.conf;
+      echo sentinel parallel-syncs ${REDIS_SENTINEL_MASTER_NAME:-mymaster} ${SENTINEL_PARALLEL_SYNCS:-1} >> /etc/sentinel.conf;
+      redis-sentinel /etc/sentinel.conf"
+    ports:
+      - "${SENTINEL_3_PORT:-26381}:${SENTINEL_PORT:-26379}"
+    networks:
+      - seeder-network
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Seeder Service
+  seeder-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seeder-service
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      # Redis Sentinel Configuration (recommended for production with failover)
+      - REDIS_USE_SENTINEL=${REDIS_USE_SENTINEL:-true}
+      - REDIS_SENTINEL_HOSTS=${REDIS_SENTINEL_HOSTS:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379}
+      - REDIS_SENTINEL_MASTER_NAME=${REDIS_SENTINEL_MASTER_NAME:-mymaster}
+      # Fallback direct connection (used when REDIS_USE_SENTINEL=false)
+      - REDIS_HOST=${REDIS_HOST:-redis-master}
+      - REDIS_PORT=${REDIS_MASTER_PORT:-6379}
+      # Application Configuration
+      - SQLITE_DB_PATH=${SQLITE_DB_PATH:-/app/data/cars.db}
+      - PORT=${PORT:-3000}
+      - CIRCUIT_BREAKER_FAILURE_THRESHOLD=${CIRCUIT_BREAKER_FAILURE_THRESHOLD:-5}
+      - CIRCUIT_BREAKER_COOLDOWN_MS=${CIRCUIT_BREAKER_COOLDOWN_MS:-2000}
+      - RECOVERY_CHUNK_SIZE=${RECOVERY_CHUNK_SIZE:-50}
+      - RECOVERY_COOLDOWN_MS=${RECOVERY_COOLDOWN_MS:-10000}
+      - RECOVERY_CHECK_INTERVAL_MS=${RECOVERY_CHECK_INTERVAL_MS:-5000}
+      - CAR_GENERATION_INTERVAL_MS=${CAR_GENERATION_INTERVAL_MS:-30}
+      - METRICS_LOG_DIR=${METRICS_LOG_DIR:-/app/logs}
+    volumes:
+      - ./src:/app/src  # Mount source code for hot reload
+      - ${DATA_VOLUME_PATH:-./data}:${SQLITE_DATA_DIR:-/app/data}  # Bind mount for live DataGrip/anyDatabaseClient access
+      - ${LOGS_VOLUME_PATH:-./logs}:${LOGS_DIR:-/app/logs}  # Bind mount for metrics logs
+      - /app/node_modules  # Anonymous volume to prevent overwriting node_modules
+    networks:
+      - seeder-network
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  seeder-network:
+    driver: bridge
+    name: ${SEEDER_NETWORK_NAME:-seeder-network}  # Explicit name prevents directory-based prefixing
+
