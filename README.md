@@ -8,8 +8,251 @@ implementation.
 
 ## 🚀 Getting Started
 
-### Strongly recommended to start up using docker compose:)
+This guide will help you set up and run the project from scratch. The project uses Docker Compose to orchestrate all services, making setup straightforward.
 
+### Prerequisites
+
+Before you begin, ensure you have the following installed on your system:
+
+- **Docker** (version 20.10 or higher)
+- **Docker Compose** (version 2.0 or higher)
+- **Git** (for cloning the repository)
+- **Bash** (for running scripts on Unix-like systems)
+
+To verify your installation:
+
+```bash
+docker --version
+docker-compose --version
+git --version
+```
+
+### Step-by-Step Setup
+
+#### Step 1: Clone the Repository
+
+```bash
+git clone <repository-url>
+cd AMA-task-data-seeder
+```
+
+#### Step 2: (Optional) Configure Environment Variables
+
+The project works out of the box with default values, but you can customize configuration by creating a `.env` file.
+
+**Option A: Use Defaults (Recommended for First-Time Setup)**
+
+Skip this step if you want to use all default values. The project will work perfectly without a `.env` file.
+
+**Option B: Customize Configuration**
+
+If you need to customize ports, paths, or other settings:
+
+1. Copy the example environment file:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit the `.env` file with your preferred values. The file contains all available variables with their defaults and descriptions. Here are the most commonly customized variables:
+   ```bash
+   # Application Port (if 3000 is already in use)
+   PORT=3001
+   
+   # Redis Ports (if default ports conflict)
+   REDIS_MASTER_PORT=6380
+   REDIS_REPLICA_PORT=6381
+   
+   # Custom Data/Log Paths
+   DATA_VOLUME_PATH=./data
+   LOGS_VOLUME_PATH=./logs
+   
+   # Circuit Breaker Tuning
+   CIRCUIT_BREAKER_FAILURE_THRESHOLD=5
+   CIRCUIT_BREAKER_COOLDOWN_MS=2000
+   
+   # Car Generation Rate (lower = more cars per minute)
+   CAR_GENERATION_INTERVAL_MS=30
+   ```
+
+   **Note**: All environment variables have sensible defaults documented in `.env.example`. See `DOCKER_ENV_CONFIG.md` for detailed explanations of each variable.
+
+#### Step 3: Make Scripts Executable (First-Time Only)
+
+If you plan to use the cleanup script, make it executable:
+
+```bash
+chmod +x clean-all-data.sh
+```
+
+#### Step 4: Start All Services with Docker Compose
+
+Start all services in detached mode (runs in background):
+
+```bash
+docker-compose up -d
+```
+
+**What happens during startup:**
+
+1. **Redis Master** starts first (port 6379 by default)
+2. **Redis Replica** starts and syncs with master (port 6380 by default)
+3. **Three Redis Sentinels** start and monitor Redis health (ports 26379, 26380, 26381)
+4. **Seeder Service** starts after Redis is healthy (port 3000 by default)
+
+The first startup may take a few minutes as Docker downloads images and builds the application.
+
+#### Step 5: Verify Services are Running
+
+Check that all containers are running:
+
+```bash
+docker-compose ps
+```
+
+You should see 6 services with status "Up":
+- `redis-master`
+- `redis-replica`
+- `redis-sentinel-1`
+- `redis-sentinel-2`
+- `redis-sentinel-3`
+- `seeder-service`
+
+#### Step 6: View Application Logs
+
+Monitor the seeder service logs to see car generation in action:
+
+```bash
+docker-compose logs -f seeder-service
+```
+
+You should see logs indicating:
+- Redis connection established
+- Car entities being generated
+- Queue processing activity
+
+Press `Ctrl+C` to stop following logs.
+
+#### Step 7: Verify Data Generation
+
+Check that data is being generated:
+
+**Option A: Check SQLite Database** (if you have sqlite3 installed):
+```bash
+sqlite3 ./data/cars.db "SELECT COUNT(*) FROM pending_cars;"
+```
+
+**Option B: Check Redis**:
+```bash
+docker exec redis-master redis-cli DBSIZE
+```
+
+**Option C: Check Logs Directory**:
+```bash
+ls -lh ./logs/
+```
+
+### Common Commands
+
+#### Start Services
+```bash
+docker-compose up -d
+```
+
+#### Stop Services
+```bash
+docker-compose stop
+```
+
+#### Stop and Remove Containers
+```bash
+docker-compose down
+```
+
+#### View Logs
+```bash
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f seeder-service
+docker-compose logs -f redis-master
+```
+
+#### Restart a Specific Service
+```bash
+docker-compose restart seeder-service
+```
+
+#### Rebuild After Code Changes
+```bash
+docker-compose up -d --build seeder-service
+```
+
+#### Clean All Data
+```bash
+./clean-all-data.sh
+```
+
+### Troubleshooting
+
+#### Port Already in Use
+
+If you get a port conflict error:
+
+1. Check which process is using the port:
+   ```bash
+   # For port 3000
+   lsof -i :3000
+   # or
+   netstat -an | grep 3000
+   ```
+
+2. Either stop the conflicting service or change the port in your `.env` file:
+   ```bash
+   PORT=3001
+   ```
+
+#### Containers Won't Start
+
+1. Check container logs:
+   ```bash
+   docker-compose logs
+   ```
+
+2. Verify Docker is running:
+   ```bash
+   docker ps
+   ```
+
+3. Check disk space:
+   ```bash
+   df -h
+   ```
+
+#### Redis Connection Issues
+
+1. Verify Redis containers are healthy:
+   ```bash
+   docker-compose ps
+   ```
+
+2. Test Redis connection:
+   ```bash
+   docker exec redis-master redis-cli ping
+   # Should return: PONG
+   ```
+
+3. Check Sentinel status:
+   ```bash
+   docker exec redis-sentinel-1 redis-cli -p 26379 SENTINEL masters
+   ```
+
+### Next Steps
+
+- **Explore the Architecture**: Read the sections below to understand how the system works
+- **Test Failover**: Try stopping the Redis master to see automatic failover in action
+- **Monitor Metrics**: Check `./logs/failover-metrics-YYYY-MM-DD.log` for system metrics
+- **Customize Configuration**: Adjust environment variables in `.env` to tune performance
 
 ------------------------------------------------------------------------
 
@@ -218,17 +461,61 @@ Triggered when:
 
 ### Quick Cleanup Script
 
-Use the `clean-all-data.sh` script to delete all data from SQLite and all BullMQ jobs from Redis:
+The `clean-all-data.sh` script provides a comprehensive way to delete all accumulated data from both SQLite and Redis/BullMQ. This is useful when you want to start fresh or clear test data.
+
+#### First-Time Setup
+
+If you just cloned this repository, make the script executable first:
+
+```bash
+chmod +x clean-all-data.sh
+```
+
+#### Usage
+
+Run the cleanup script:
 
 ```bash
 ./clean-all-data.sh
 ```
 
-This script will:
-- ✅ Delete all data from SQLite `pending_cars` table (preserves schema)
-- ✅ Clear all BullMQ jobs from Redis master and replica
-- ✅ Flush all Redis data from both instances
-- ✅ Work with Docker containers running (temporarily stops seeder-service to avoid DB locks)
+#### What the Script Does (Step-by-Step)
+
+The script performs the following operations in order:
+
+1. **Stops seeder-service** (if running)
+   - Temporarily stops the `seeder-service` container to avoid database locks
+   - This prevents conflicts when cleaning the SQLite database
+
+2. **Cleans SQLite Database**
+   - Deletes all rows from the `pending_cars` table
+   - Preserves the database schema (table structure remains intact)
+   - If the database file doesn't exist, it will be created automatically when the service restarts
+
+3. **Ensures Redis Containers are Running**
+   - Checks if Redis containers are running
+   - If not running, automatically starts them (master, replica, and all sentinels)
+   - Waits for Redis to be ready before proceeding
+
+4. **Cleans BullMQ from Redis Master**
+   - Scans for all BullMQ keys matching pattern `bull:car-seeder-queue:*`
+   - Deletes all BullMQ jobs (waiting, active, completed, failed)
+   - Flushes all data from the Redis master instance (port 6379)
+
+5. **Cleans BullMQ from Redis Replica**
+   - Performs the same cleanup on the Redis replica instance (port 6380)
+   - Ensures both master and replica are completely clean
+
+6. **Verifies Cleanup**
+   - Checks SQLite row count (should be 0)
+   - Checks Redis key counts (should be 0)
+   - Displays a summary of the cleanup results
+
+#### What Gets Cleaned
+
+- **SQLite**: All rows from `pending_cars` table (schema preserved)
+- **BullMQ**: All jobs from `car-seeder-queue` (waiting, active, completed, failed)
+- **Redis**: All data flushed from master (port 6379) and replica (port 6380)
 
 ### Docker Containers During Cleanup
 
@@ -242,15 +529,25 @@ The cleanup script is designed to work with Docker containers running:
 
 3. **No need to stop Docker** - You don't need to stop Docker or `docker-compose down`. The script handles everything safely while containers are running.
 
-### What Gets Cleaned
-
-- **SQLite**: All rows from `pending_cars` table (schema preserved)
-- **BullMQ**: All jobs from `car-seeder-queue` (waiting, active, completed, failed)
-- **Redis**: All data flushed from master (port 6379) and replica (port 6380)
-
 ### After Cleanup
 
 After running the cleanup script:
-1. Restart seeder-service: `docker-compose up -d seeder-service`
-2. Or restart all services: `docker-compose up -d`
+
+1. **Restart seeder-service**: 
+   ```bash
+   docker-compose up -d seeder-service
+   ```
+
+2. **Or restart all services**: 
+   ```bash
+   docker-compose up -d
+   ```
+
 3. The database schema will be automatically recreated if needed
+
+### When to Use This Script
+
+- **Starting fresh**: When you want to clear all test data and start from scratch
+- **Testing failover scenarios**: Before testing Redis failover, clear existing data to see clean metrics
+- **Debugging**: When you need to reset the system state for troubleshooting
+- **Development**: Regular cleanup during development to avoid data accumulation
